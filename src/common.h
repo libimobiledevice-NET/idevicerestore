@@ -33,7 +33,9 @@ extern "C" {
 #endif
 
 #include <inttypes.h>
+#ifndef _MSC_VER
 #include <unistd.h>
+#endif
 
 #include <plist/plist.h>
 #include <libirecovery.h>
@@ -135,8 +137,14 @@ char *generate_guid(void);
 
 #ifdef WIN32
 #include <windows.h>
+#ifndef _MSC_VER
 #include <unistd.h>
 #define __mkdir(path, mode) mkdir(path)
+#else
+#define __mkdir(path, mode) CreateDirectory(path, NULL)
+#endif
+#define FMT_qu "%I64u"
+#define FMT_016llx "%016I64x"
 #ifndef sleep
 #define sleep(x) Sleep(x*1000)
 #endif
