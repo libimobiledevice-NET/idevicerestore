@@ -23,7 +23,7 @@
 #define MBN_H
 
 #include <stdint.h>
-#include "msc_compat.h"
+#include "common.h"
 
 #define MBN_V1_MAGIC "\x0A\x00\x00\x00"
 #define MBN_V1_MAGIC_SIZE 4

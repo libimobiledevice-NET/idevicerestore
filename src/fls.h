@@ -23,6 +23,7 @@
 #define FLS_H
 
 #include <stdint.h>
+#include "common.h"
 
 PACK(
 struct _fls_element {
