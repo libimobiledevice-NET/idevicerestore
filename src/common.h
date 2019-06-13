@@ -171,3 +171,9 @@ uint64_t _plist_dict_get_uint(plist_t dict, const char *key);
 #endif
 
 #endif
+
+#ifndef _MSC_VER
+#define PACK( __Declaration__ ) __Declaration__ __attribute__((__packed__))
+#else
+#define PACK( __Declaration__ ) __pragma( pack(push, 1) ) __Declaration__ __pragma( pack(pop) )
+#endif
