@@ -28,7 +28,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _MSC_VER
 #include <unistd.h>
+#endif
 #include <errno.h>
 #include <libgen.h>
 #include <time.h>
@@ -409,7 +411,7 @@ int mkstemp(char *tmpl)
 char *get_temp_filename(const char *prefix)
 {
 	char *result = NULL;
-	char *tmpdir;
+	char *tmpdir = NULL;
 	size_t lt;
 	size_t lp;
 	const char *TMPVARS[] = { "TMPDIR", "TMP", "TEMP", "TEMPDIR", NULL };
