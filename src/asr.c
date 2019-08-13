@@ -224,9 +224,14 @@ int asr_perform_validation(asr_client_t asr, const char* filesystem)
 	}
 
 #ifdef WIN32
+#ifdef _MSC_VER
+	length = _fseeki64(file, 0, SEEK_END);
+	_fseeki64(file, 0, SEEK_SET);
+#else
 	length = _lseeki64(fileno(file), 0, SEEK_END);
 	_lseeki64(fileno(file), 0, SEEK_SET);
 	rewind(file);
+#endif
 #else
 	fseeko(file, 0, SEEK_END);
 	length = ftello(file);
@@ -327,8 +332,17 @@ int asr_handle_oob_data_request(asr_client_t asr, plist_t packet, FILE* file)
 	}
 
 #ifdef WIN32
+#ifdef _MSC_VER
+	if (_fseeki64(file, oob_offset, SEEK_SET) != 0) {
+		error("ERROR: Unable to read seek to offset: %s\n",
+			strerror(errno));
+		free(oob_data);
+		return -1;
+	}
+#else
 	rewind(file);
 	_lseeki64(fileno(file), oob_offset, SEEK_SET);
+#endif
 #else
 	fseeko(file, oob_offset, SEEK_SET);
 #endif
@@ -361,8 +375,13 @@ int asr_send_payload(asr_client_t asr, const char* filesystem)
 	}
 
 #ifdef WIN32
+#ifdef _MSC_VER
+	length = _fseeki64(file, 0, SEEK_END);
+	_fseeki64(file, 0, SEEK_SET);
+#else
 	length = _lseeki64(fileno(file), 0, SEEK_END);
 	_lseeki64(fileno(file), 0, SEEK_SET);
+#endif
 	rewind(file);
 #else
 	fseeko(file, 0, SEEK_END);

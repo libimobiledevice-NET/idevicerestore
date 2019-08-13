@@ -87,8 +87,14 @@ ipsw_archive* ipsw_open(const char* ipsw)
 		return NULL;
 	}
 
+#ifdef _MSC_VER
+	struct __stat64 fst;
+	err = _stat64(ipsw, &fst);
+#else
 	struct stat fst;
-	if (stat(ipsw, &fst) != 0) {
+	err = stat(ipsw, &fst);
+#endif
+	if (err != 0) {
 		error("ERROR: ipsw_open %s: %s\n", ipsw, strerror(errno));
 		return NULL;
 	}
