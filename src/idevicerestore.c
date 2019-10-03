@@ -1554,7 +1554,7 @@ int main(int argc, char* argv[]) {
 
 	idevicerestore_client = client;
 
-#ifdef WIN32
+#if defined(WIN32) || defined(_MSC_VER)
 	signal(SIGINT, handle_signal);
 	signal(SIGTERM, handle_signal);
 	signal(SIGABRT, handle_signal);

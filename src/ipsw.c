@@ -53,6 +53,11 @@
 
 #define BUFSIZE 0x100000
 
+#ifdef _MSC_VER
+#include <io.h>
+#define access _access
+#endif
+
 typedef struct {
 	struct zip* zip;
 	char *path;
@@ -242,13 +247,22 @@ int ipsw_extract_to_file_with_progress(const char* ipsw, const char* infile, con
 		char *filepath = build_path(archive->path, infile);
 		char actual_filepath[PATH_MAX+1];
 		char actual_outfile[PATH_MAX+1];
+#ifdef _MSC_VER
+		if (GetFullPathName(filepath, PATH_MAX + 1, actual_filepath, NULL) < 0) {
+#else
 		if (!realpath(filepath, actual_filepath)) {
+#endif
 			error("ERROR: realpath failed on %s: %s\n", filepath, strerror(errno));
 			ret = -1;
 			goto leave;
 		} else {
 			actual_outfile[0] = '\0';
+#ifdef _MSC_VER
+			GetFullPathName(outfile, PATH_MAX + 1, actual_outfile, NULL);
+			if (strcmp(actual_filepath, actual_outfile) == 0) {
+#else
 			if (realpath(outfile, actual_outfile) && (strcmp(actual_filepath, actual_outfile) == 0)) {
+#endif
 				/* files are identical */
 				ret = 0;
 			} else {

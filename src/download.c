@@ -141,7 +141,11 @@ int download_to_file(const char* url, const char* filename, int enable_progress)
 
 #ifdef WIN32
 	fflush(f);
+#ifdef _MSC_VER
+	uint64_t sz = _fseeki64(f, 0, SEEK_CUR);
+#else
 	uint64_t sz = _lseeki64(fileno(f), 0, SEEK_CUR);
+#endif
 #else
 	off_t sz = ftello(f);
 #endif
