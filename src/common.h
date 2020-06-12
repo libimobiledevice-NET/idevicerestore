@@ -121,11 +121,17 @@ extern struct idevicerestore_mode_t idevicerestore_modes[];
 
 extern int idevicerestore_debug;
 
+#ifndef _MSC_VER
 __attribute__((format(printf, 1, 2)))
+#endif
 void info(const char* format, ...);
+#ifndef _MSC_VER
 __attribute__((format(printf, 1, 2)))
+#endif
 void error(const char* format, ...);
+#ifndef _MSC_VER
 __attribute__((format(printf, 1, 2)))
+#endif
 void debug(const char* format, ...);
 
 void debug_plist(plist_t plist);
