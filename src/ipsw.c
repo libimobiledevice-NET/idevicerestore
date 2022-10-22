@@ -33,6 +33,8 @@
 #include <errno.h>
 #include <limits.h>
 #include <sys/stat.h>
+#include <sys/types.h>
+#include <dirent.h>
 #include <zip.h>
 #ifdef HAVE_OPENSSL
 #include <openssl/sha.h>
@@ -44,12 +46,14 @@
 #define SHA1_Final SHA1Final
 #endif
 
+#include <libimobiledevice-glue/termcolors.h>
+#include <plist/plist.h>
+
 #include "ipsw.h"
 #include "locking.h"
 #include "download.h"
 #include "common.h"
 #include "idevicerestore.h"
-#include "json_plist.h"
 
 #define BUFSIZE 0x100000
 
@@ -81,6 +85,236 @@ static char* build_path(const char* path, const char* file)
 	memcpy(fullpath+plen+1, file, flen);
 	fullpath[plen+1+flen] = '\0';
 	return fullpath;
+}
+
+int ipsw_print_info(const char* path)
+{
+	struct stat fst;
+
+	if (stat(path, &fst) != 0) {
+		error("ERROR: '%s': %s\n", path, strerror(errno));
+		return -1;
+	}
+
+	char thepath[PATH_MAX];
+
+	if (S_ISDIR(fst.st_mode)) {
+		sprintf(thepath, "%s/BuildManifest.plist", path);
+		if (stat(thepath, &fst) != 0) {
+			error("ERROR: '%s': %s\n", thepath, strerror(errno));
+			return -1;
+		}
+	} else {
+		sprintf(thepath, "%s", path);
+	}
+
+	FILE* f = fopen(thepath, "r");
+	if (!f) {
+		error("ERROR: Can't open '%s': %s\n", thepath, strerror(errno));
+		return -1;
+	}
+	uint32_t magic;
+	if (fread(&magic, 1, 4, f) != 4) {
+		fclose(f);
+		fprintf(stderr, "Failed to read from '%s'\n", path);
+		return -1;
+	}
+	fclose(f);
+
+	char* plist_buf = NULL;
+	uint32_t plist_len = 0;
+
+	if (memcmp(&magic, "PK\x03\x04", 4) == 0) {
+		unsigned int rlen = 0;
+		if (ipsw_extract_to_memory(thepath, "BuildManifest.plist", (unsigned char**)&plist_buf, &rlen) < 0) {
+			error("ERROR: Failed to extract BuildManifest.plist from IPSW!\n");
+			return -1;
+		}
+		plist_len = (uint32_t)rlen;
+	} else {
+		size_t rlen = 0;
+		if (read_file(thepath, (void**)&plist_buf, &rlen) < 0) {
+			error("ERROR: Failed to read BuildManifest.plist!\n");
+			return -1;
+		}
+		plist_len = (uint32_t)rlen;
+	}
+
+	plist_t manifest = NULL;
+	plist_from_memory(plist_buf, plist_len, &manifest);
+	free(plist_buf);
+
+	plist_t val;
+
+	char* prod_ver = NULL;
+	char* build_ver = NULL;
+
+	val = plist_dict_get_item(manifest, "ProductVersion");
+	if (val) {
+		plist_get_string_val(val, &prod_ver);
+	}
+
+	val = plist_dict_get_item(manifest, "ProductBuildVersion");
+	if (val) {
+		plist_get_string_val(val, &build_ver);
+	}
+
+	cprintf(FG_WHITE "Product Version: " FG_BRIGHT_YELLOW "%s" COLOR_RESET FG_WHITE "   Build: " FG_BRIGHT_YELLOW "%s" COLOR_RESET "\n", prod_ver, build_ver);
+	free(prod_ver);
+	free(build_ver);
+	cprintf(FG_WHITE "Supported Product Types:" COLOR_RESET);
+	val = plist_dict_get_item(manifest, "SupportedProductTypes");
+	if (val) {
+		plist_array_iter iter = NULL;
+		plist_array_new_iter(val, &iter);
+		if (iter) {
+			plist_t item = NULL;
+			do {
+				plist_array_next_item(val, iter, &item);
+				if (item) {
+					char* item_str = NULL;
+					plist_get_string_val(item, &item_str);
+					cprintf(" " FG_BRIGHT_CYAN "%s" COLOR_RESET, item_str);
+					free(item_str);
+				}
+			} while (item);
+			free(iter);
+		}
+	}
+	cprintf("\n");
+
+	cprintf(FG_WHITE "Build Identities:" COLOR_RESET "\n");
+
+	plist_t build_ids_grouped = plist_new_dict();
+
+	plist_t build_ids = plist_dict_get_item(manifest, "BuildIdentities");
+	plist_array_iter build_id_iter = NULL;
+	plist_array_new_iter(build_ids, &build_id_iter);
+	if (build_id_iter) {
+		plist_t build_identity = NULL;
+		do {
+			plist_array_next_item(build_ids, build_id_iter, &build_identity);
+			if (!build_identity) {
+				break;
+			}
+			plist_t node;
+			char* variant_str = NULL;
+
+			node = plist_access_path(build_identity, 2, "Info", "Variant");
+			plist_get_string_val(node, &variant_str);
+
+			plist_t entries = NULL;
+			plist_t group = plist_dict_get_item(build_ids_grouped, variant_str);
+			if (!group) {
+				group = plist_new_dict();
+				node = plist_access_path(build_identity, 2, "Info", "RestoreBehavior");
+				if (node) {
+					plist_dict_set_item(group, "RestoreBehavior", plist_copy(node));
+				} else {
+					if (strstr(variant_str, "Upgrade")) {
+						plist_dict_set_item(group, "RestoreBehavior", plist_new_string("Update"));
+					} else if (strstr(variant_str, "Erase")) {
+						plist_dict_set_item(group, "RestoreBehavior", plist_new_string("Erase"));
+					}
+				}
+				entries = plist_new_array();
+				plist_dict_set_item(group, "Entries", entries);
+				plist_dict_set_item(build_ids_grouped, variant_str, group);
+			} else {
+				entries = plist_dict_get_item(group, "Entries");
+			}
+			free(variant_str);
+			plist_array_append_item(entries, plist_copy(build_identity));
+		} while (build_identity);
+		free(build_id_iter);
+	}
+
+	plist_dict_iter build_ids_group_iter = NULL;
+	plist_dict_new_iter(build_ids_grouped, &build_ids_group_iter);
+	if (build_ids_group_iter) {
+		plist_t group = NULL;
+		int group_no = 0;
+		do {
+			group = NULL;
+			char* key = NULL;
+			plist_dict_next_item(build_ids_grouped, build_ids_group_iter, &key, &group);
+			if (!key) {
+				break;
+			}
+			plist_t node;
+			char* rbehavior = NULL;
+
+			group_no++;
+			node = plist_dict_get_item(group, "RestoreBehavior");
+			plist_get_string_val(node, &rbehavior);
+			cprintf("  " FG_WHITE "[%d] Variant: " FG_BRIGHT_CYAN "%s" FG_WHITE "   Behavior: " FG_BRIGHT_CYAN "%s" COLOR_RESET "\n", group_no, key, rbehavior);
+			free(key);
+			free(rbehavior);
+
+			build_ids = plist_dict_get_item(group, "Entries");
+			if (!build_ids) {
+				continue;
+			}
+			build_id_iter = NULL;
+			plist_array_new_iter(build_ids, &build_id_iter);
+			if (!build_id_iter) {
+				continue;
+			}
+			plist_t build_id;
+			do {
+				build_id = NULL;
+				plist_array_next_item(build_ids, build_id_iter, &build_id);
+				if (!build_id) {
+					break;
+				}
+				uint64_t chip_id = 0;
+				uint64_t board_id = 0;
+				char* hwmodel = NULL;
+
+				node = plist_dict_get_item(build_id, "ApChipID");
+				if (PLIST_IS_STRING(node)) {
+					char* strval = NULL;
+					plist_get_string_val(node, &strval);
+					if (strval) {
+						chip_id = strtoull(strval, NULL, 0);
+						free(strval);
+					}
+				} else {
+					plist_get_uint_val(node, &chip_id);
+				}
+
+				node = plist_dict_get_item(build_id, "ApBoardID");
+				if (PLIST_IS_STRING(node)) {
+					char* strval = NULL;
+					plist_get_string_val(node, &strval);
+					if (strval) {
+						board_id = strtoull(strval, NULL, 0);
+						free(strval);
+					}
+				} else {
+					plist_get_uint_val(node, &board_id);
+				}
+
+				node = plist_access_path(build_id, 2, "Info", "DeviceClass");
+				plist_get_string_val(node, &hwmodel);
+
+				irecv_device_t irecvdev = NULL;
+				if (irecv_devices_get_device_by_hardware_model(hwmodel, &irecvdev) == 0) {
+					cprintf("    ChipID: " FG_GREEN "%04x" COLOR_RESET "   BoardID: " FG_GREEN "%02x" COLOR_RESET "   Model: " FG_YELLOW "%-8s" COLOR_RESET "  " FG_MAGENTA "%s" COLOR_RESET "\n", (int)chip_id, (int)board_id, hwmodel, irecvdev->display_name);
+				} else {
+					cprintf("    ChipID: " FG_GREEN "%04x" COLOR_RESET "   BoardID: " FG_GREEN "%02x" COLOR_RESET "   Model: " FG_YELLOW "%s" COLOR_RESET "\n", (int)chip_id, (int)board_id, hwmodel);
+				}
+				free(hwmodel);
+			} while (build_id);
+			free(build_id_iter);
+		} while (group);
+		free(build_ids_group_iter);
+	}
+	plist_free(build_ids_grouped);
+
+	plist_free(manifest);
+
+	return 0;
 }
 
 ipsw_archive* ipsw_open(const char* ipsw)
@@ -172,7 +406,14 @@ int ipsw_get_file_size(const char* ipsw, const char* infile, uint64_t* size)
 int ipsw_extract_to_file_with_progress(const char* ipsw, const char* infile, const char* outfile, int print_progress)
 {
 	int ret = 0;
-	ipsw_archive* archive = ipsw_open(ipsw);
+	ipsw_archive* archive = NULL;
+
+	if (!ipsw || !infile || !outfile) {
+		error("ERROR: Invalid argument\n");
+		return -1;
+	}
+
+	archive = ipsw_open(ipsw);
 	if (archive == NULL) {
 		error("ERROR: Invalid archive\n");
 		return -1;
@@ -229,7 +470,7 @@ int ipsw_extract_to_file_with_progress(const char* ipsw, const char* infile, con
 				break;
 			}
 			if (fwrite(buffer, 1, count, fd) != count) {
-				error("ERROR: frite: %s\n", outfile);
+				error("ERROR: Writing to '%s' failed: %s\n", outfile, strerror(errno));
 				ret = -1;
 				break;
 			}
@@ -247,11 +488,11 @@ int ipsw_extract_to_file_with_progress(const char* ipsw, const char* infile, con
 		char *filepath = build_path(archive->path, infile);
 		char actual_filepath[PATH_MAX+1];
 		char actual_outfile[PATH_MAX+1];
-#ifdef _MSC_VER
-		if (GetFullPathName(filepath, PATH_MAX + 1, actual_filepath, NULL) < 0) {
-#else
+		if (!filepath) {
+			ret = -1;
+			goto leave;
+		}
 		if (!realpath(filepath, actual_filepath)) {
-#endif
 			error("ERROR: realpath failed on %s: %s\n", filepath, strerror(errno));
 			ret = -1;
 			goto leave;
@@ -311,7 +552,7 @@ int ipsw_extract_to_file_with_progress(const char* ipsw, const char* infile, con
 						break;
 					}
 					if (fwrite(buffer, 1, r, fo) != r) {
-						error("ERROR: fwrite failed\n");
+						error("ERROR: Writing to '%s' failed: %s\n", actual_outfile, strerror(errno));
 						ret = -1;
 						break;
 					}
@@ -425,47 +666,206 @@ int ipsw_extract_to_memory(const char* ipsw, const char* infile, unsigned char**
 		zip_fclose(zfile);
 	} else {
 		char *filepath = build_path(archive->path, infile);
-		FILE *f = fopen(filepath, "rb");
-		if (!f) {
-			error("ERROR: %s: fopen failed for %s: %s\n", __func__, filepath, strerror(errno));
-			free(filepath);
-			ipsw_close(archive);
-			return -2;
-		}
 		struct stat fst;
-		if (fstat(fileno(f), &fst) != 0) {
-			fclose(f);
-			error("ERROR: %s: fstat failed for %s: %s\n", __func__, filepath, strerror(errno));
+#ifdef WIN32
+		if (stat(filepath, &fst) != 0) {
+#else
+		if (lstat(filepath, &fst) != 0) {
+#endif
+			error("ERROR: %s: stat failed for %s: %s\n", __func__, filepath, strerror(errno));
 			free(filepath);
 			ipsw_close(archive);
 			return -1;
 		}
-
 		size = fst.st_size;
 		buffer = (unsigned char*)malloc(size+1);
 		if (buffer == NULL) {
 			error("ERROR: Out of memory\n");
-			fclose(f);
 			free(filepath);
 			ipsw_close(archive);
 			return -1;
 		}
-		if (fread(buffer, 1, size, f) != size) {
+
+#ifndef WIN32
+		if (S_ISLNK(fst.st_mode)) {
+			if (readlink(filepath, (char*)buffer, size) < 0) {
+				error("ERROR: %s: readlink failed for %s: %s\n", __func__, filepath, strerror(errno));
+				free(filepath);
+				free(buffer);
+				ipsw_close(archive);
+				return -1;
+			}
+		} else {
+#endif
+			FILE *f = fopen(filepath, "rb");
+			if (!f) {
+				error("ERROR: %s: fopen failed for %s: %s\n", __func__, filepath, strerror(errno));
+				free(filepath);
+				free(buffer);
+				ipsw_close(archive);
+				return -2;
+			}
+			if (fread(buffer, 1, size, f) != size) {
+				fclose(f);
+				error("ERROR: %s: fread failed for %s: %s\n", __func__, filepath, strerror(errno));
+				free(filepath);
+				free(buffer);
+				ipsw_close(archive);
+				return -1;
+			}
 			fclose(f);
-			error("ERROR: %s: fread failed for %s: %s\n", __func__, filepath, strerror(errno));
-			free(filepath);
-			ipsw_close(archive);
-			return -1;
+#ifndef WIN32
 		}
+#endif
 		buffer[size] = '\0';
 
-		fclose(f);
 		free(filepath);
 	}
 	ipsw_close(archive);
 
 	*pbuffer = buffer;
 	*psize = size;
+	return 0;
+}
+
+int ipsw_extract_send(const char* ipsw, const char* infile, int blocksize, ipsw_send_cb send_callback, void* ctx)
+{
+	unsigned char* buffer = NULL;
+	size_t done = 0;
+	size_t total_size = 0;
+
+	ipsw_archive* archive = ipsw_open(ipsw);
+	if (archive == NULL) {
+		error("ERROR: Invalid archive\n");
+		return -1;
+	}
+
+	if (archive->zip) {
+		int zindex = zip_name_locate(archive->zip, infile, 0);
+		if (zindex < 0) {
+			debug("NOTE: zip_name_locate: '%s' not found in archive.\n", infile);
+			ipsw_close(archive);
+			return -1;
+		}
+
+		struct zip_stat zstat;
+		zip_stat_init(&zstat);
+		if (zip_stat_index(archive->zip, zindex, 0, &zstat) != 0) {
+			error("ERROR: zip_stat_index: %s\n", infile);
+			ipsw_close(archive);
+			return -1;
+		}
+
+		struct zip_file* zfile = zip_fopen_index(archive->zip, zindex, 0);
+		if (zfile == NULL) {
+			error("ERROR: zip_fopen_index: %s\n", infile);
+			ipsw_close(archive);
+			return -1;
+		}
+
+		total_size = zstat.size;
+		buffer = (unsigned char*) malloc(blocksize);
+		if (buffer == NULL) {
+			error("ERROR: Out of memory\n");
+			zip_fclose(zfile);
+			ipsw_close(archive);
+			return -1;
+		}
+
+		while (done < total_size) {
+			size_t size = total_size-done;
+			if (size > blocksize) size = blocksize;
+			zip_int64_t zr = zip_fread(zfile, buffer, size);
+			if (zr < 0) {
+				error("ERROR: %s: zip_fread: %s\n", __func__, infile);
+				break;
+			} else if (zr == 0) {
+				// EOF
+				break;
+			}
+			if (send_callback(ctx, buffer, zr) < 0) {
+				error("ERROR: %s: send failed\n", __func__);
+				break;
+			}
+			done += zr;
+		}
+		zip_fclose(zfile);
+		free(buffer);
+	} else {
+		char *filepath = build_path(archive->path, infile);
+		struct stat fst;
+#ifdef WIN32
+		if (stat(filepath, &fst) != 0) {
+#else
+		if (lstat(filepath, &fst) != 0) {
+#endif
+			error("ERROR: %s: stat failed for %s: %s\n", __func__, filepath, strerror(errno));
+			free(filepath);
+			ipsw_close(archive);
+			return -1;
+		}
+		total_size = fst.st_size;
+		buffer = (unsigned char*)malloc(blocksize);
+		if (buffer == NULL) {
+			error("ERROR: Out of memory\n");
+			free(filepath);
+			ipsw_close(archive);
+			return -1;
+		}
+
+#ifndef WIN32
+		if (S_ISLNK(fst.st_mode)) {
+			ssize_t rl = readlink(filepath, (char*)buffer, (total_size > blocksize) ? blocksize : total_size);
+			if (rl < 0) {
+				error("ERROR: %s: readlink failed for %s: %s\n", __func__, filepath, strerror(errno));
+				free(filepath);
+				free(buffer);
+				ipsw_close(archive);
+				return -1;
+			}		
+			send_callback(ctx, buffer, (size_t)rl);
+		} else {
+#endif
+			FILE *f = fopen(filepath, "rb");
+			if (!f) {
+				error("ERROR: %s: fopen failed for %s: %s\n", __func__, filepath, strerror(errno));
+				free(filepath);
+				free(buffer);
+				ipsw_close(archive);
+				return -2;
+			}
+
+			while (done < total_size) {
+				size_t size = total_size-done;
+				if (size > blocksize) size = blocksize;
+				size_t fr = fread(buffer, 1, size, f);
+				if (fr != size) {
+					error("ERROR: %s: fread failed for %s: %s\n", __func__, filepath, strerror(errno));
+					break;
+				}
+				if (send_callback(ctx, buffer, fr) < 0) {
+					error("ERROR: %s: send failed\n", __func__);
+					break;
+				}
+				done += fr;
+			}
+			fclose(f);
+#ifndef WIN32
+		}
+#endif
+		free(filepath);
+		free(buffer);
+	}
+	ipsw_close(archive);
+
+	if (done < total_size) {
+		error("ERROR: %s: Sending file data for %s failed (sent %" PRIu64 "/%" PRIu64 ")\n", __func__, infile, (uint64_t)done, (uint64_t)total_size);
+		return -1;
+	}
+
+	// send a NULL buffer to mark end of transfer
+	send_callback(ctx, NULL, 0);
+
 	return 0;
 }
 
@@ -513,6 +913,128 @@ int ipsw_extract_restore_plist(const char* ipsw, plist_t* restore_plist)
 	return -1;
 }
 
+static int ipsw_list_contents_recurse(ipsw_archive *archive, const char *path, ipsw_list_cb cb, void *ctx)
+{
+	int ret = 0;
+	char *base = build_path(archive->path, path);
+
+	DIR *dirp = opendir(base);
+
+	if (!dirp) {
+		error("ERROR: failed to open directory %s\n", base);
+		free(base);
+		return -1;
+	}
+
+	while (ret >= 0) {
+		struct dirent *dir = readdir(dirp);
+		if (!dir)
+			break;
+
+		if (!strcmp(dir->d_name, ".") || !strcmp(dir->d_name, ".."))
+			continue;
+
+		char *fpath = build_path(base, dir->d_name);
+		char *subpath;
+		if (*path)
+			subpath = build_path(path, dir->d_name);
+		else
+			subpath = strdup(dir->d_name);
+
+		struct stat st;
+#ifdef WIN32
+		ret = stat(fpath, &st);
+#else
+		ret = lstat(fpath, &st);
+#endif
+		if (ret != 0) {
+			error("ERROR: %s: stat failed for %s: %s\n", __func__, fpath, strerror(errno));
+			free(fpath);
+			free(subpath);
+			break;
+		}
+
+		ret = cb(ctx, archive->path, subpath, &st);
+
+		if (ret >= 0 && S_ISDIR(st.st_mode))
+			ipsw_list_contents_recurse(archive, subpath, cb, ctx);
+
+		free(fpath);
+		free(subpath);
+	}
+
+	closedir(dirp);
+	free(base);
+	return ret;
+}
+
+int ipsw_list_contents(const char* ipsw, ipsw_list_cb cb, void *ctx)
+{
+	int ret = 0;
+
+	ipsw_archive* archive = ipsw_open(ipsw);
+	if (archive == NULL) {
+		error("ERROR: Invalid archive\n");
+		return -1;
+	}
+
+	if (archive->zip) {
+        int64_t entries = zip_get_num_entries(archive->zip, 0);
+		if (entries < 0) {
+			error("ERROR: zip_get_num_entries failed\n");
+			ipsw_close(archive);
+			return -1;
+		}
+
+		for (int64_t index = 0; index < entries; index++) {
+			zip_stat_t stat;
+
+			zip_stat_init(&stat);
+			if (zip_stat_index(archive->zip, index, 0, &stat) < 0) {
+				error("ERROR: zip_stat_index failed for %s\n", stat.name);
+				ret = -1;
+				continue;
+			}
+
+			uint8_t opsys;
+			uint32_t attributes;
+			if (zip_file_get_external_attributes(archive->zip, index, 0, &opsys, &attributes) < 0) {
+				error("ERROR: zip_file_get_external_attributes failed for %s\n", stat.name);
+				ret = -1;
+				continue;
+			}
+			if (opsys != ZIP_OPSYS_UNIX) {
+				error("ERROR: File %s does not have UNIX attributes\n", stat.name);
+				ret = -1;
+				continue;
+			}
+
+			struct stat st;
+			memset(&st, 0, sizeof(st));
+			st.st_ino = 1 + index;
+			st.st_nlink = 1;
+			st.st_mode = attributes >> 16;
+			st.st_size = stat.size;
+
+			char *name = strdup(stat.name);
+			if (name[strlen(name) - 1] == '/')
+				name[strlen(name) - 1] = '\0';
+
+			ret = cb(ctx, ipsw, name, &st);
+
+			free(name);
+
+			if (ret < 0)
+				break;
+		}
+	} else {
+		ret = ipsw_list_contents_recurse(archive, "", cb, ctx);
+	}
+
+	ipsw_close(archive);
+	return ret;
+}
+
 void ipsw_close(ipsw_archive* archive)
 {
 	if (archive != NULL) {
@@ -533,6 +1055,7 @@ int ipsw_get_signed_firmwares(const char* product, plist_t* firmwares)
 	plist_t dict = NULL;
 	plist_t node = NULL;
 	plist_t fws = NULL;
+	const char* product_type = NULL;
 	uint32_t count = 0;
 	uint32_t i = 0;
 
@@ -541,13 +1064,13 @@ int ipsw_get_signed_firmwares(const char* product, plist_t* firmwares)
 	}
 
 	*firmwares = NULL;
-	snprintf(url, sizeof(url), "https://api.ipsw.me/v3/device/%s", product);
+	snprintf(url, sizeof(url), "https://api.ipsw.me/v4/device/%s", product);
 
 	if (download_to_buffer(url, &jdata, &jsize) < 0) {
 		error("ERROR: Download from %s failed.\n", url);
 		return -1;
 	}
-	dict = json_to_plist(jdata);
+	plist_from_json(jdata, jsize, &dict);
 	free(jdata);
 	if (!dict || plist_get_node_type(dict) != PLIST_DICT) {
 		error("ERROR: Failed to parse json data.\n");
@@ -555,15 +1078,21 @@ int ipsw_get_signed_firmwares(const char* product, plist_t* firmwares)
 		return -1;
 	}
 
-	node = plist_dict_get_item(dict, product);
-	if (!node || plist_get_node_type(node) != PLIST_DICT) {
-		error("ERROR: Unexpected json data returned?!\n");
+	node = plist_dict_get_item(dict, "identifier");
+	if (!node || plist_get_node_type(node) != PLIST_STRING) {
+		error("ERROR: Unexpected json data returned - missing 'identifier'\n");
 		plist_free(dict);
 		return -1;
 	}
-	fws = plist_dict_get_item(node, "firmwares");
+	product_type = plist_get_string_ptr(node, NULL);
+	if (!product_type || strcmp(product_type, product) != 0) {
+		error("ERROR: Unexpected json data returned - failed to read identifier\n");
+		plist_free(dict);
+		return -1;
+	}
+	fws = plist_dict_get_item(dict, "firmwares");
 	if (!fws || plist_get_node_type(fws) != PLIST_ARRAY) {
-		error("ERROR: Unexpected json data returned?!\n");
+		error("ERROR: Unexpected json data returned - missing 'firmwares'\n");
 		plist_free(dict);
 		return -1;
 	}
