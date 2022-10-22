@@ -498,12 +498,7 @@ int ipsw_extract_to_file_with_progress(const char* ipsw, const char* infile, con
 			goto leave;
 		} else {
 			actual_outfile[0] = '\0';
-#ifdef _MSC_VER
-			GetFullPathName(outfile, PATH_MAX + 1, actual_outfile, NULL);
-			if (strcmp(actual_filepath, actual_outfile) == 0) {
-#else
 			if (realpath(outfile, actual_outfile) && (strcmp(actual_filepath, actual_outfile) == 0)) {
-#endif
 				/* files are identical */
 				ret = 0;
 			} else {
