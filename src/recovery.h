@@ -40,11 +40,11 @@ struct recovery_client_t {
 	plist_t tss;
 };
 
-int recovery_check_mode(struct idevicerestore_client_t* client);
 int recovery_client_new(struct idevicerestore_client_t* client);
 void recovery_client_free(struct idevicerestore_client_t* client);
 int recovery_enter_restore(struct idevicerestore_client_t* client, plist_t build_identity);
 int recovery_send_component(struct idevicerestore_client_t* client, plist_t build_identity, const char* component);
+int recovery_send_component_and_command(struct idevicerestore_client_t* client, plist_t build_identity, const char* component, const char* command);
 int recovery_send_ibec(struct idevicerestore_client_t* client, plist_t build_identity);
 int recovery_send_applelogo(struct idevicerestore_client_t* client, plist_t build_identity);
 int recovery_send_devicetree(struct idevicerestore_client_t* client, plist_t build_identity);
@@ -54,7 +54,6 @@ int recovery_send_loaded_by_iboot(struct idevicerestore_client_t* client, plist_
 int recovery_send_reset(struct idevicerestore_client_t* client);
 int recovery_send_ticket(struct idevicerestore_client_t* client);
 int recovery_set_autoboot(struct idevicerestore_client_t* client, int enable);
-int recovery_get_ecid(struct idevicerestore_client_t* client, uint64_t* ecid);
 int recovery_is_image4_supported(struct idevicerestore_client_t* client);
 int recovery_get_ap_nonce(struct idevicerestore_client_t* client, unsigned char** nonce, int* nonce_size);
 int recovery_get_sep_nonce(struct idevicerestore_client_t* client, unsigned char** nonce, int* nonce_size);

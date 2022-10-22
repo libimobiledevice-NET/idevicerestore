@@ -61,12 +61,12 @@
 #define MAX_PRINT_LEN 64*1024
 
 struct idevicerestore_mode_t idevicerestore_modes[] = {
-	{  0, "WTF"      },
-	{  1, "DFU"      },
-	{  2, "Recovery" },
-	{  3, "Restore"  },
-	{  4, "Normal"   },
-	{ -1,  NULL      }
+	{  0, "Unknown"  },
+	{  1, "WTF"      },
+	{  2, "DFU"      },
+	{  3, "Recovery" },
+	{  4, "Restore"  },
+	{  5, "Normal"   },
 };
 
 int idevicerestore_debug = 0;
@@ -568,7 +568,7 @@ uint64_t _plist_dict_get_uint(plist_t dict, const char *key)
 	uint64_t strsz = 0;
 	plist_t node = plist_dict_get_item(dict, key);
 	if (!node) {
-		return (uint64_t)-1LL;
+		return uintval;
 	}
 	switch (plist_get_node_type(node)) {
 	case PLIST_UINT:
@@ -648,4 +648,54 @@ uint8_t _plist_dict_get_bool(plist_t dict, const char *key)
 		break;
 	}
 	return bval;
+}
+
+int _plist_dict_copy_uint(plist_t target_dict, plist_t source_dict, const char *key, const char *alt_source_key)
+{
+	if (plist_dict_get_item(source_dict, (alt_source_key) ? alt_source_key : key) == NULL) {
+		return -1;
+	}
+	uint64_t u64val = _plist_dict_get_uint(source_dict, (alt_source_key) ? alt_source_key : key);
+	plist_dict_set_item(target_dict, key, plist_new_uint(u64val));
+	return 0;
+}
+
+int _plist_dict_copy_bool(plist_t target_dict, plist_t source_dict, const char *key, const char *alt_source_key)
+{
+	if (plist_dict_get_item(source_dict, (alt_source_key) ? alt_source_key : key) == NULL) {
+		return -1;
+	}
+	uint64_t bval = _plist_dict_get_bool(source_dict, (alt_source_key) ? alt_source_key : key);
+	plist_dict_set_item(target_dict, key, plist_new_bool(bval));
+	return 0;
+}
+
+int _plist_dict_copy_data(plist_t target_dict, plist_t source_dict, const char *key, const char *alt_source_key)
+{
+	plist_t node = plist_dict_get_item(source_dict, (alt_source_key) ? alt_source_key : key);
+	if (!PLIST_IS_DATA(node)) {
+		return -1;
+	}
+	plist_dict_set_item(target_dict, key, plist_copy(node));
+	return 0;
+}
+
+int _plist_dict_copy_string(plist_t target_dict, plist_t source_dict, const char *key, const char *alt_source_key)
+{
+	plist_t node = plist_dict_get_item(source_dict, (alt_source_key) ? alt_source_key : key);
+	if (!PLIST_IS_STRING(node)) {
+		return -1;
+	}
+	plist_dict_set_item(target_dict, key, plist_copy(node));
+	return 0;
+}
+
+int _plist_dict_copy_item(plist_t target_dict, plist_t source_dict, const char *key, const char *alt_source_key)
+{
+	plist_t node = plist_dict_get_item(source_dict, (alt_source_key) ? alt_source_key : key);
+	if (!node) {
+		return -1;
+	}
+	plist_dict_set_item(target_dict, key, plist_copy(node));
+	return 0;
 }

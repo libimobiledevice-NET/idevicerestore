@@ -39,16 +39,23 @@ extern "C" {
 
 #include <plist/plist.h>
 #include <libirecovery.h>
+#include <libimobiledevice-glue/thread.h>
 
 #include "idevicerestore.h"
-#include "thread.h"
 
-#define MODE_UNKNOWN        -1
-#define MODE_WTF             0
-#define MODE_DFU             1
-#define MODE_RECOVERY        2
-#define MODE_RESTORE         3
-#define MODE_NORMAL          4
+#define _MODE_UNKNOWN         0
+#define _MODE_WTF             1
+#define _MODE_DFU             2
+#define _MODE_RECOVERY        3
+#define _MODE_RESTORE         4
+#define _MODE_NORMAL          5
+
+#define MODE_UNKNOWN  &idevicerestore_modes[_MODE_UNKNOWN]
+#define MODE_WTF      &idevicerestore_modes[_MODE_WTF]
+#define MODE_DFU      &idevicerestore_modes[_MODE_DFU]
+#define MODE_RECOVERY &idevicerestore_modes[_MODE_RECOVERY]
+#define MODE_RESTORE  &idevicerestore_modes[_MODE_RESTORE]
+#define MODE_NORMAL   &idevicerestore_modes[_MODE_NORMAL]
 
 #define FLAG_QUIT            1
 
@@ -84,12 +91,15 @@ struct idevicerestore_entry_t {
 struct idevicerestore_client_t {
 	int flags;
 	plist_t tss;
+	plist_t tss_localpolicy;
+	plist_t tss_recoveryos_root_ticket;
 	char* tss_url;
 	plist_t version_data;
 	uint64_t ecid;
 	unsigned char* nonce;
 	int nonce_size;
 	int image4supported;
+	plist_t build_manifest;
 	plist_t preflight_info;
 	char* udid;
 	char* srnm;
@@ -115,6 +125,8 @@ struct idevicerestore_client_t {
 	mutex_t device_event_mutex;
 	cond_t device_event_cond;
 	int ignore_device_add_events;
+	plist_t macos_variant;
+	char* restore_variant;
 };
 
 extern struct idevicerestore_mode_t idevicerestore_modes[];
@@ -161,6 +173,13 @@ char *generate_guid(void);
 #define __usleep(x) usleep(x)
 #endif
 
+#ifndef S_IFLNK
+#define S_IFLNK 0120000
+#endif
+#ifndef S_ISLNK
+#define S_ISLNK(m) (((m) & S_IFMT) == S_IFLNK)
+#endif
+
 int mkdir_with_parents(const char *dir, int mode);
 
 char *get_temp_filename(const char *prefix);
@@ -179,6 +198,11 @@ void get_user_input(char *buf, int maxlen, int secure);
 
 uint8_t _plist_dict_get_bool(plist_t dict, const char *key);
 uint64_t _plist_dict_get_uint(plist_t dict, const char *key);
+int _plist_dict_copy_uint(plist_t target_dict, plist_t source_dict, const char *key, const char *alt_source_key);
+int _plist_dict_copy_bool(plist_t target_dict, plist_t source_dict, const char *key, const char *alt_source_key);
+int _plist_dict_copy_data(plist_t target_dict, plist_t source_dict, const char *key, const char *alt_source_key);
+int _plist_dict_copy_string(plist_t target_dict, plist_t source_dict, const char *key, const char *alt_source_key);
+int _plist_dict_copy_item(plist_t target_dict, plist_t source_dict, const char *key, const char *alt_source_key);
 
 #ifdef __cplusplus
 }
